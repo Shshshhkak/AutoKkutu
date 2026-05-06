@@ -1,5 +1,4 @@
-// KKUTU browser bot bundle (Optimized version with caching and rate limiting)
-// Loaded from raw GitHub via fetch(...).then(r=>r.text()).then(eval)
+// KKUTU browser bot bundle (Updated natural input and disconnect handling)
 
 // BEGIN browser/kkutu-dom.js
 (function () {
@@ -91,10 +90,30 @@
       if (!chat || !button) {
         throw new Error('Chat input or submit button not found on this page.');
       }
+      
+      const wordStr = String(word);
       chat.focus();
-      chat.value = String(word);
-      ['input', 'change'].forEach(type => chat.dispatchEvent(new Event(type, { bubbles: true })));
-      button.click();
+      
+      // 클립보드 API를 사용한 자연스러운 paste 이벤트 시뮬레이션
+      // 또는 keydown/keyup을 포함해서 더 자연스럽게 보이도록
+      
+      // 1단계: beforeinput 이벤트 (선택적이지만 일부 사이트에서 감지)
+      const beforeInputEvent = new Event('beforeinput', { bubbles: true, cancelable: true });
+      chat.dispatchEvent(beforeInputEvent);
+      
+      // 2단계: 값 변경
+      chat.value = wordStr;
+      
+      // 3단계: 자연스러운 input/change/keyup 이벤트 발생
+      ['input', 'change', 'keyup'].forEach(type => {
+        const evt = new Event(type, { bubbles: true, cancelable: true });
+        chat.dispatchEvent(evt);
+      });
+      
+      // 4단계: 버튼 클릭 (약간의 지연을 추가해서 더 자연스럽게)
+      setTimeout(() => {
+        button.click();
+      }, 50);
     },
 
     getLastWord() {
@@ -119,6 +138,11 @@
 
     isGamePage() {
       return Boolean($('.jjo-display.ellipse') || $('.room-head-mode') || $('#Talk'));
+    },
+
+    isChatDisconnected() {
+      const disconnectNotice = $('.chat-disconnect') || $('.socket-error-message');
+      return Boolean(disconnectNotice && isVisible(disconnectNotice));
     },
 
     cleanWord,
@@ -2222,6 +2246,16 @@
     if (!isSafePage()) {
       log('Stopped because this is not a kkutu game page.');
       state.running = false;
+      return;
+    }
+
+    // WebSocket 연결 상태 확인 (1005 오류 감지)
+    if (g.DOM?.isChatDisconnected?.()) {
+      log('WebSocket disconnected (1005 error detected). Pausing for 5 seconds...');
+      state.tickInterval = 5000; // 일시적으로 간격 증가
+      setTimeout(() => {
+        state.tickInterval = 3000; // 5초 후 원래 간격으로 복원
+      }, 5000);
       return;
     }
 

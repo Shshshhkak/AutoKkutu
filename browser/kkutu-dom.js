@@ -87,10 +87,30 @@
       if (!chat || !button) {
         throw new Error('Chat input or submit button not found on this page.');
       }
+      
+      const wordStr = String(word);
       chat.focus();
-      chat.value = String(word);
-      ['input', 'change'].forEach(type => chat.dispatchEvent(new Event(type, { bubbles: true })));
-      button.click();
+      
+      // 클립보드 API를 사용한 자연스러운 paste 이벤트 시뮬레이션
+      // 또는 keydown/keyup을 포함해서 더 자연스럽게 보이도록
+      
+      // 1단계: beforeinput 이벤트 (선택적이지만 일부 사이트에서 감지)
+      const beforeInputEvent = new Event('beforeinput', { bubbles: true, cancelable: true });
+      chat.dispatchEvent(beforeInputEvent);
+      
+      // 2단계: 값 변경
+      chat.value = wordStr;
+      
+      // 3단계: 자연스러운 input/change/keyup 이벤트 발생
+      ['input', 'change', 'keyup'].forEach(type => {
+        const evt = new Event(type, { bubbles: true, cancelable: true });
+        chat.dispatchEvent(evt);
+      });
+      
+      // 4단계: 버튼 클릭 (약간의 지연을 추가해서 더 자연스럽게)
+      setTimeout(() => {
+        button.click();
+      }, 50);
     },
 
     getLastWord() {
@@ -115,6 +135,11 @@
 
     isGamePage() {
       return Boolean($('.jjo-display.ellipse') || $('.room-head-mode') || $('#Talk'));
+    },
+
+    isChatDisconnected() {
+      const disconnectNotice = $('.chat-disconnect') || $('.socket-error-message');
+      return Boolean(disconnectNotice && isVisible(disconnectNotice));
     },
 
     cleanWord,

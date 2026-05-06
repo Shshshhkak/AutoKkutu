@@ -110,6 +110,16 @@
       return;
     }
 
+    // WebSocket 연결 상태 확인 (1005 오류 감지)
+    if (g.DOM?.isChatDisconnected?.()) {
+      log('WebSocket disconnected (1005 error detected). Pausing for 5 seconds...');
+      state.tickInterval = 5000; // 일시적으로 간격 증가
+      setTimeout(() => {
+        state.tickInterval = 3000; // 5초 후 원래 간격으로 복원
+      }, 5000);
+      return;
+    }
+
     const isTurn = g.DOM.isMyTurn();
     if (isTurn) {
       await playTurn();
