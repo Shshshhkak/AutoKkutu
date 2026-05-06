@@ -11,6 +11,7 @@
     error: null,
     turnCount: 0,
     promise: Promise.resolve(),
+    tickInterval: 3000, // 체크 간격 증가 (밀리초) - 서버 부하 감소
   };
 
   function log(message) {
@@ -35,19 +36,29 @@
       return null;
     }
 
-    for (const candidate of candidates) {
+    // 최대 3개까지만 검증 - API 부하 제어 (더욱 강화)
+    const maxCheckCount = Math.min(3, candidates.length);
+    const checkList = candidates.slice(0, maxCheckCount);
+
+    for (const candidate of checkList) {
       try {
         const valid = await g.Dict.isValidWord(candidate);
         if (valid) {
           return candidate;
         }
       } catch (error) {
-        log(`Dictionary lookup failed for ${candidate}: ${error}`);
-        state.error = error;
+        log(`Dictionary lookup error for ${candidate}: ${error.message || error}`);
+        // 에러는 기록하지만 계속 진행
       }
     }
 
-    log(`All ${candidates.length} candidate words were rejected by the dictionary.`);
+    // 검증된 단어가 없으면 첫 번째 후보 사용 (시간 초과 방지)
+    if (candidates.length > 0) {
+      log(`No verified word found in ${maxCheckCount} candidates, using fallback: ${candidates[0]}`);
+      return candidates[0];
+    }
+
+    log(`All ${checkList.length} candidate words were rejected by the dictionary.`);
     return null;
   }
 
@@ -111,7 +122,7 @@
       window.setTimeout(async () => {
         await tick();
         resolve();
-      }, 1000);
+      }, state.tickInterval); // 조정 가능한 간격 사용
     })).then(() => {
       if (state.running) scheduleNext();
     });
@@ -143,6 +154,7 @@
     },
 
     status() {
+      const dictStats = g.Dict?.getCacheStats?.() || {};
       return {
         running: state.running,
         lastAction: state.lastAction,
@@ -150,7 +162,26 @@
         lastCandidate: state.lastCandidate,
         error: state.error,
         turnCount: state.turnCount,
+        tickInterval: state.tickInterval,
+        dictCache: dictStats.cachedWords,
+        pendingDictRequests: dictStats.pendingRequests,
       };
+    },
+
+    // 체크 간격 조정
+    setTickInterval(ms) {
+      if (ms < 500) {
+        log('Warning: Interval below 500ms may cause server overload. Setting minimum to 500ms.');
+        state.tickInterval = 500;
+      } else {
+        state.tickInterval = ms;
+        log(`Tick interval set to ${ms}ms`);
+      }
+    },
+
+    // 딕셔너리 캐시 강제 초기화
+    clearDictCache() {
+      g.Dict?.clearCache?.();
     },
 
     async playOnce() {
