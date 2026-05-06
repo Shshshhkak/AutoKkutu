@@ -1,39 +1,71 @@
 (function () {
   const g = window.KkutuBot = window.KkutuBot || {};
-  if (g.DOM) return;
 
   g.DOM = {
-    // 진짜 채팅창 찾기 (가짜 UserMessage 방어기제 우회)
+    // [핵심 수정] 진짜 채팅창 찾기 로직
     getChatBox() {
-      const inputs = Array.from(document.querySelectorAll('input[id*="User"]'));
-      // ID에 'Massage'가 포함된 것이 진짜 (끄투의 함정 역이용)
-      let realInput = inputs.find(el => 
-        el.id.includes('Massage') && 
-        el.offsetParent !== null && 
-        window.getComputedStyle(el).display !== 'none'
+      // 1. ID에 'Massage'가 포함된 input을 찾음 (끄투 함정 역이용)
+      const allInputs = Array.from(document.querySelectorAll('input'));
+      let realInput = allInputs.find(el => 
+        el.id.includes('Massage') && el.offsetParent !== null
       );
 
+      // 2. 만약 없다면, 화면에 보이고 placeholder가 있는 input을 찾음
       if (!realInput) {
-        realInput = document.querySelector('#Talk') || document.querySelector('.game-input');
+        realInput = allInputs.find(el => 
+          el.offsetParent !== null && 
+          (el.placeholder || el.className.includes('chat') || el.id.includes('Talk'))
+        );
       }
       return realInput;
     },
 
-    // 단어 전송 (TypeError: dispatchEvent 해결)
+    // 단어를 입력하고 엔터를 치는 동작
     sendWord(word) {
-      let chat = this.getChatBox();
-      const button = document.querySelector('#ChatBtn') || document.querySelector('button[type="submit"]');
+      const chat = this.getChatBox();
+      const button = document.querySelector('#ChatBtn') || document.querySelector('.btn-send');
 
-      if (!chat) return;
-
-      // jQuery 객체일 경우 원본 추출
-      if (window.jQuery && chat instanceof window.jQuery) chat = chat[0];
-
-      // dispatchEvent 체크 및 안전한 전송
-      if (typeof chat.dispatchEvent !== 'function') {
-        chat = chat.querySelector?.('input') || chat;
+      if (!chat) {
+        console.error('[KkutuBot] 채팅창을 찾지 못했습니다.');
+        return;
       }
 
+      const wordStr = String(word).trim();
+      chat.focus();
+      
+      // [해결] 단순 chat.value 할당 대신 이벤트 발생
+      chat.value = wordStr;
+
+      // React나 Vue 환경에서도 인식되도록 표준 이벤트 발생
+      const evts = ['input', 'change'];
+      evts.forEach(name => {
+        const e = document.createEvent('HTMLEvents');
+        e.initEvent(name, true, true);
+        chat.dispatchEvent(e);
+      });
+
+      // 엔터키 시뮬레이션
+      const enter = new KeyboardEvent('keydown', {
+        bubbles: true, cancelable: true, key: 'Enter', keyCode: 13
+      });
+      chat.dispatchEvent(enter);
+
+      // 전송 버튼 클릭 (약간의 시간차)
+      setTimeout(() => { if (button) button.click(); }, 150);
+    },
+
+    getPresentWord() {
+      const node = document.querySelector('.jjo-display.ellipse') || document.querySelector('.target-word');
+      return node ? node.textContent.trim() : '';
+    },
+
+    isMyTurn() {
+      // 타이머가 보이면 내 차례로 간주 (끄투의 일반적인 구조)
+      const timer = document.querySelector('.jjo-timer');
+      return timer && window.getComputedStyle(timer).display !== 'none';
+    }
+  };
+})();
       const wordStr = String(word).trim();
       chat.focus();
       chat.value = wordStr;
