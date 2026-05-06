@@ -1,6 +1,7 @@
 (function () {
   // Browser DOM helpers for kkutu.co.kr game pages.
   // These functions read the current game state and submit chat input.
+  // 실제 kkutu.co.kr DOM 구조에 맞게 최적화
   const g = window.KkutuBot = window.KkutuBot || {};
   if (g.DOM) return;
 
@@ -20,6 +21,14 @@
     return el && el.offsetParent !== null && window.getComputedStyle(el).display !== 'none';
   }
 
+  function findElement(...selectors) {
+    for (const selector of selectors) {
+      const el = $(selector);
+      if (el) return el;
+    }
+    return null;
+  }
+
   function cleanWord(input) {
     return String(input || '')
       .trim()
@@ -30,7 +39,7 @@
 
   g.DOM = {
     getGameMode() {
-      const node = $('.room-head-mode');
+      const node = $('.room-head-mode') || $('.jjo-info-mode');
       const text = safeText(node);
       if (!text) return '';
       const parts = text.split('/')[0]?.trim();
@@ -38,12 +47,21 @@
     },
 
     getPresentWord() {
-      const display = $('.jjo-display.ellipse') || $('.jjo-display');
+      const display = findElement(
+        '.jjo-display.ellipse',
+        '.jjo-display',
+        '.game-word',
+        '[data-word]'
+      );
       return cleanWord(safeText(display));
     },
 
     getWordLength() {
-      const node = $('.jjo-display-word-length');
+      const node = findElement(
+        '.jjo-display-word-length',
+        '.word-length',
+        '.game-word-length'
+      );
       const text = safeText(node);
       if (!text) return 0;
       const match = text.match(/\d+/);
@@ -51,66 +69,95 @@
     },
 
     isMyTurn() {
-      const input = $('.game-input');
+      const input = findElement(
+        '.game-input',
+        '#Talk',
+        'input[placeholder*="단어"]',
+        'input[id*="input"]'
+      );
       return Boolean(input && isVisible(input));
     },
 
     getTurnError() {
-      return safeText($('.game-fail-text'));
+      return safeText(findElement(
+        '.game-fail-text',
+        '.jjo-fail',
+        '.error-message'
+      ));
     },
 
     getTurnTime() {
-      const node = document.querySelector(".graph.jjo-turn-time > .graph-bar");
+      const node = findElement(
+        '.graph.jjo-turn-time > .graph-bar',
+        '[class*="turn"] [class*="time"]',
+        '.turn-timer'
+      );
       const text = safeText(node);
       if (!text) return '';
       return text.replace(/\D+$/, '');
     },
 
     getRoundTime() {
-      const node = document.querySelector(".graph.jjo-round-time > .graph-bar");
+      const node = findElement(
+        '.graph.jjo-round-time > .graph-bar',
+        '[class*="round"] [class*="time"]',
+        '.round-timer'
+      );
       const text = safeText(node);
       if (!text) return '';
       return text.replace(/\D+$/, '');
     },
 
     getWordHistory() {
-      return $all('.ellipse.history-item.expl-mother').map(v => cleanWord(safeText(v.childNodes[0]))).filter(Boolean);
+      return $all('.ellipse.history-item.expl-mother')
+        .map(v => cleanWord(safeText(v.childNodes[0])))
+        .filter(Boolean)
+        .concat(
+          $all('.jjo-history span, [class*="history"] span')
+            .map(v => cleanWord(safeText(v)))
+            .filter(Boolean)
+        )
+        .filter((w, i, arr) => arr.indexOf(w) === i); // 중복 제거
     },
 
     getChatBox() {
-      return $('#Talk');
+      return findElement(
+        '#Talk',
+        'input[type="text"]',
+        'input[placeholder*="단어"]',
+        '.game-input'
+      );
     },
 
     sendWord(word) {
       const chat = this.getChatBox();
-      const button = $('#ChatBtn');
+      const button = findElement('#ChatBtn', '[class*="send"]', 'button[type="submit"]');
+      
       if (!chat || !button) {
         throw new Error('Chat input or submit button not found on this page.');
       }
       
-      const wordStr = String(word);
+      const wordStr = String(word).trim();
       chat.focus();
       
-      // 클립보드 API를 사용한 자연스러운 paste 이벤트 시뮬레이션
-      // 또는 keydown/keyup을 포함해서 더 자연스럽게 보이도록
-      
-      // 1단계: beforeinput 이벤트 (선택적이지만 일부 사이트에서 감지)
-      const beforeInputEvent = new Event('beforeinput', { bubbles: true, cancelable: true });
-      chat.dispatchEvent(beforeInputEvent);
-      
-      // 2단계: 값 변경
+      // 입력값 설정 및 이벤트 발생
       chat.value = wordStr;
       
-      // 3단계: 자연스러운 input/change/keyup 이벤트 발생
-      ['input', 'change', 'keyup'].forEach(type => {
-        const evt = new Event(type, { bubbles: true, cancelable: true });
-        chat.dispatchEvent(evt);
-      });
+      // 이벤트 순서: beforeinput -> input -> change -> keyup
+      const events = [
+        new Event('beforeinput', { bubbles: true, cancelable: true }),
+        new Event('input', { bubbles: true }),
+        new Event('change', { bubbles: true }),
+        new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }),
+        new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }),
+      ];
       
-      // 4단계: 버튼 클릭 (약간의 지연을 추가해서 더 자연스럽게)
+      events.forEach(evt => chat.dispatchEvent(evt));
+      
+      // 버튼 클릭
       setTimeout(() => {
         button.click();
-      }, 50);
+      }, 100);
     },
 
     getLastWord() {
@@ -134,12 +181,24 @@
     },
 
     isGamePage() {
-      return Boolean($('.jjo-display.ellipse') || $('.room-head-mode') || $('#Talk'));
+      // 게임 페이지 인식: 핵심 요소 중 하나 이상 존재
+      return Boolean(
+        this.getPresentWord() ||
+        this.getChatBox() ||
+        $('[class*="game"]') ||
+        $('[class*="jjo"]')
+      );
     },
 
     isChatDisconnected() {
-      const disconnectNotice = $('.chat-disconnect') || $('.socket-error-message');
-      return Boolean(disconnectNotice && isVisible(disconnectNotice));
+      return Boolean(
+        findElement(
+          '.chat-disconnect',
+          '.socket-error-message',
+          '[class*="disconnect"]',
+          '[class*="error"]'
+        )
+      );
     },
 
     cleanWord,
