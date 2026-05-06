@@ -1,6 +1,6 @@
 (async () => {
   try {
-    const url = 'https://raw.githubusercontent.com/hsheric0210/AutoKkutu/v1.2/browser/kkutu-bundle.js';
+    const url = 'https://raw.githubusercontent.com/Shshshhkak/AutoKkutu/refs/heads/v1.2/browser/kkutu-bundle.js';
     const resp = await fetch(url, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}: 파일 없음`);
     const code = await resp.text();
