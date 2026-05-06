@@ -1,39 +1,73 @@
 (function () {
-  // Browser DOM helpers for kkutu.co.kr game pages.
-  // These functions read the current game state and submit chat input.
-  // 실제 kkutu.co.kr DOM 구조에 맞게 최적화
   const g = window.KkutuBot = window.KkutuBot || {};
   if (g.DOM) return;
 
-  function $(selector) {
-    return document.querySelector(selector);
-  }
+  g.DOM = {
+    // 진짜 채팅창 찾기 (가짜 UserMessage 방어기제 우회)
+    getChatBox() {
+      const inputs = Array.from(document.querySelectorAll('input[id*="User"]'));
+      // ID에 'Massage'가 포함된 것이 진짜 (끄투의 함정 역이용)
+      let realInput = inputs.find(el => 
+        el.id.includes('Massage') && 
+        el.offsetParent !== null && 
+        window.getComputedStyle(el).display !== 'none'
+      );
 
-  function $all(selector) {
-    return Array.from(document.querySelectorAll(selector));
-  }
+      if (!realInput) {
+        realInput = document.querySelector('#Talk') || document.querySelector('.game-input');
+      }
+      return realInput;
+    },
 
-  function safeText(node) {
-    return node?.textContent?.trim() || '';
-  }
+    // 단어 전송 (TypeError: dispatchEvent 해결)
+    sendWord(word) {
+      let chat = this.getChatBox();
+      const button = document.querySelector('#ChatBtn') || document.querySelector('button[type="submit"]');
 
-  function isVisible(el) {
-    return el && el.offsetParent !== null && window.getComputedStyle(el).display !== 'none';
-  }
+      if (!chat) return;
 
-  function findElement(...selectors) {
-    for (const selector of selectors) {
-      const el = $(selector);
-      if (el) return el;
+      // jQuery 객체일 경우 원본 추출
+      if (window.jQuery && chat instanceof window.jQuery) chat = chat[0];
+
+      // dispatchEvent 체크 및 안전한 전송
+      if (typeof chat.dispatchEvent !== 'function') {
+        chat = chat.querySelector?.('input') || chat;
+      }
+
+      const wordStr = String(word).trim();
+      chat.focus();
+      chat.value = wordStr;
+
+      // 이벤트 발생 (표준 방식)
+      try {
+        const inputEvt = document.createEvent('HTMLEvents');
+        inputEvt.initEvent('input', true, true);
+        chat.dispatchEvent(inputEvt);
+
+        const changeEvt = document.createEvent('HTMLEvents');
+        changeEvt.initEvent('change', true, true);
+        chat.dispatchEvent(changeEvt);
+      } catch (e) {
+        console.warn('이벤트 발생 실패, 직접 입력을 시도합니다.');
+      }
+
+      // 버튼 클릭
+      setTimeout(() => {
+        if (button) button.click();
+      }, 100);
+    },
+
+    getPresentWord() {
+      const node = document.querySelector('.jjo-display.ellipse') || document.querySelector('.target-word');
+      return node ? node.textContent.trim() : '';
+    },
+
+    isMyTurn() {
+      const timer = document.querySelector('.jjo-timer');
+      return timer && window.getComputedStyle(timer).display !== 'none';
     }
-    return null;
-  }
-
-  function cleanWord(input) {
-    return String(input || '')
-      .trim()
-      .replace(/[\n\r\t]/g, '')
-      .replace(/[^\uAC00-\uD7A3a-zA-Z0-9ㄱ-ㅎ\s]/g, '')
+  };
+})();
       .trim();
   }
 
