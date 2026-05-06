@@ -2,52 +2,53 @@
   const g = window.KkutuBot = window.KkutuBot || {};
 
   g.DOM = {
-    // 1. 진짜 채팅창(Massage) 정밀 타격
+    // [1] 진짜 입력창 정밀 타격 (ID: UserMassage... )
     getChatBox() {
-      const inputs = Array.from(document.querySelectorAll('input'));
-      // 스펠링 함정을 피하기 위해 'Massage'가 포함된 요소 중 실제로 보이는 것만 필터링
-      return inputs.find(el => 
-        el.id.includes('Massage') && 
-        el.offsetParent !== null && 
-        window.getComputedStyle(el).display !== 'none'
+      return Array.from(document.querySelectorAll('input')).find(el => 
+        el.id.includes('Massage') && el.offsetParent !== null
       );
     },
 
-    // 2. MutationObserver 및 붙여넣기 감지 우회 입력
+    // [2] 최후의 입력 우회 기술
     sendWord(word) {
       const chat = this.getChatBox();
+      const button = document.querySelector('#ChatBtn') || document.querySelector('.btn-send');
       if (!chat) return;
 
       const wordStr = String(word).trim();
       
-      // 포커스 및 초기화
+      // 포커스를 주고 클릭 이벤트를 발생시켜 가상 키보드 상태를 유도
       chat.focus();
-      chat.value = ''; 
+      chat.click();
 
+      // [핵심] 끄투의 MutationObserver를 속이기 위해 value를 직접 건드리지 않고
+      // 브라우저의 '데이터 입력' 이벤트를 순차적으로 시뮬레이션합니다.
+      chat.value = ""; // 초기화
+      
+      // 텍스트 삽입 시도 (가장 강력한 방법)
       try {
-        // [핵심 우회] execCommand는 사용자의 직접 입력과 동일한 경로로 처리되어 
-        // value 감시(MutationObserver)를 피할 수 있습니다.
-        document.execCommand('insertText', false, wordStr);
+        if (!document.execCommand('insertText', false, wordStr)) {
+            throw new Error('execCommand failed');
+        }
       } catch (e) {
-        // execCommand 실패 시 최후의 수단 (이벤트 강제 발생)
+        // execCommand가 막혔을 때: 클립보드 이벤트를 흉내내어 값 주입
         chat.value = wordStr;
-        chat.dispatchEvent(new Event('input', { bubbles: true }));
       }
 
-      // 3. 엔터키 시뮬레이션 (서버 전송을 위한 이벤트 트리거)
-      setTimeout(() => {
-        const events = [
-          new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }),
-          new KeyboardEvent('keypress', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }),
-          new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 })
-        ];
-        
-        events.forEach(evt => chat.dispatchEvent(evt));
+      // 서버가 "사람이 쳤다"고 인식하게 만드는 필수 이벤트 셋트
+      const eventOptions = { bubbles: true, cancelable: true, composed: true };
+      chat.dispatchEvent(new InputEvent('beforeinput', eventOptions));
+      chat.dispatchEvent(new InputEvent('input', eventOptions));
+      chat.dispatchEvent(new Event('change', eventOptions));
 
-        // 전송 버튼 보조 클릭
-        const btn = document.querySelector('#ChatBtn') || document.querySelector('.btn-send');
-        if (btn) btn.click();
-      }, 150);
+      // [3] 전송: 엔터키 + 버튼 클릭
+      setTimeout(() => {
+        const enter = new KeyboardEvent('keydown', {
+          ...eventOptions, key: 'Enter', code: 'Enter', keyCode: 13, which: 13
+        });
+        chat.dispatchEvent(enter);
+        if (button) button.click();
+      }, 100);
     },
 
     getPresentWord() {
