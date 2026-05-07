@@ -1,4 +1,8 @@
-// KKUTU browser bot bundle (Fixed keyup event detection)
+// KKUTU browser bot bundle (GUI + Strategy Mode)
+//
+// 실행 방법:
+// fetch('https://raw.githubusercontent.com/Shshshhkak/AutoKkutu/v1.2/browser/kkutu-bundle.js').then(r=>r.text()).then(eval);
+
 (function () {
   const g = window.KkutuBot = window.KkutuBot || {};
 
@@ -22,65 +26,36 @@
       // [우회 핵심] 각 문자마다 keydown/keyup 이벤트를 발생시켜
       // 서버의 keyup 카운트 검증을 우회 (입력 문자 수 == keyup 이벤트 수)
       const options = { bubbles: true, cancelable: true, composed: true };
-      let charIndex = 0;
 
-      const addCharWithDelay = () => {
-        if (charIndex >= wordStr.length) {
-          // 모든 문자 입력 완료 후 전송
-          setTimeout(() => {
-            const enter = new KeyboardEvent('keydown', {
-              ...options, key: 'Enter', code: 'Enter', keyCode: 13, which: 13
-            });
-            chat.dispatchEvent(enter);
-            if (button) button.click();
-          }, 150);
-          return;
+      // (1) 한글 입력 시작 알림
+      chat.dispatchEvent(new CompositionEvent('compositionstart', options));
+      
+      // (2) 데이터 직접 주입 (MutationObserver 감시를 피하기 위해 execCommand 우선 사용)
+      chat.value = ''; 
+      try {
+        if (!document.execCommand('insertText', false, wordStr)) {
+          throw 'execCommand block';
         }
+      } catch (e) {
+        // execCommand 차단 시 강제 대입 후 input 이벤트 강제 발생
+        chat.value = wordStr;
+      }
 
-        const char = wordStr[charIndex];
-        const charCode = char.charCodeAt(0);
+      // (3) 입력 중 및 변경 인식 시키기
+      chat.dispatchEvent(new InputEvent('input', { ...options, inputType: 'insertText', data: wordStr }));
+      chat.dispatchEvent(new Event('change', options));
 
-        // keydown 이벤트 (keyCode와 which 필수 - 서버가 이를 검증)
-        const keydownEvent = new KeyboardEvent('keydown', {
-          key: char,
-          code: 'Key' + char.toUpperCase(),
-          keyCode: charCode,
-          which: charCode,
-          bubbles: true,
-          cancelable: true,
-          composed: true
+      // (4) 한글 입력 종료 알림
+      chat.dispatchEvent(new CompositionEvent('compositionend', { ...options, data: wordStr }));
+
+      // (5) 전송 (기계적인 느낌을 지우기 위해 약간의 지연 후 엔터)
+      setTimeout(() => {
+        const enter = new KeyboardEvent('keydown', {
+          ...options, key: 'Enter', code: 'Enter', keyCode: 13, which: 13
         });
-        chat.dispatchEvent(keydownEvent);
-
-        // 값 변경 (한글 조합 방식)
-        chat.value += char;
-
-        // input 이벤트
-        chat.dispatchEvent(new InputEvent('input', { 
-          ...options, 
-          inputType: 'insertText', 
-          data: char 
-        }));
-
-        // keyup 이벤트 (keyCode와 which를 반드시 포함 - 서버가 이를 검증)
-        const keyupEvent = new KeyboardEvent('keyup', {
-          key: char,
-          code: 'Key' + char.toUpperCase(),
-          keyCode: charCode,
-          which: charCode,
-          bubbles: true,
-          cancelable: true,
-          composed: true
-        });
-        chat.dispatchEvent(keyupEvent);
-
-        charIndex++;
-        // 다음 문자 처리 (자연스러운 타이핑 속도: 30ms)
-        setTimeout(addCharWithDelay, 30);
-      };
-
-      // 첫 번째 문자 처리 시작
-      addCharWithDelay();
+        chat.dispatchEvent(enter);
+        if (button) button.click();
+      }, 150);
     },
 
     getPresentWord() {
@@ -95,6 +70,7 @@
   };
 })();
 
+(function () {
   // Site dictionary validation for kkutu.co.kr.
   // The bot checks candidate words with the site's own /o/dict endpoint.
   // 캐싱, 동시성 제어, 타임아웃으로 안정적으로 작동
@@ -251,6 +227,7 @@
   };
 })();
 
+(function(){
   // Compact word candidate map for the bot.
   // It is intentionally a small local lexicon so the browser script can run quickly.
   const g = window.KkutuBot = window.KkutuBot || {};
@@ -2142,39 +2119,649 @@
   };
 })();
 
+(function () {
+  // 게임 모드별 단어 선택 전략
   const g = window.KkutuBot = window.KkutuBot || {};
+  if (g.Strategy) return;
+
+  // 끄투의 특수 단어 특성
+  const wordTraits = {
+    // 긴 단어: 40글자 이상
+    isLongWord(word) {
+      return word && word.length >= 40;
+    },
+
+    // 한방 단어: 일반적으로 짧고 끝나기 어려운 글자로 끝나는 단어
+    // 예: "힝", "흠", "으", "긔" 등으로 시작하는 단어
+    isOneShotWord(word) {
+      if (!word || word.length < 2) return false;
+      const lastChar = word[word.length - 1];
+      const oneShhotEndings = ['힝', '흠', '으', '긔', '읍', '앍', '윽', '웍', '힢'];
+      return oneShhotEndings.includes(lastChar);
+    },
+
+    // 미션 단어: 특정 패턴 (예: 중간에 같은 글자 반복, 특별한 구조)
+    isMissionWord(word) {
+      if (!word || word.length < 3) return false;
+      // 간단한 미션: 같은 글자가 2번 이상 반복되는 단어
+      const charMap = {};
+      for (const char of word) {
+        charMap[char] = (charMap[char] || 0) + 1;
+      }
+      return Object.values(charMap).some(count => count >= 2);
+    },
+
+    // 종합 점수 계산 (높을수록 좋은 선택지)
+    getScore(word, modes) {
+      let score = 0;
+
+      if (modes.includes('longWord') && this.isLongWord(word)) {
+        score += 1000; // 긴 단어 우선도 최고
+      }
+
+      if (modes.includes('oneShot') && this.isOneShotWord(word)) {
+        score += 800;  // 한방 단어
+      }
+
+      if (modes.includes('mission') && this.isMissionWord(word)) {
+        score += 500;  // 미션 단어
+      }
+
+      // 기본 점수: 길이 가산
+      score += word.length * 10;
+
+      return score;
+    },
+  };
+
+  g.Strategy = {
+    /**
+     * 게임 모드에 맞는 최적의 단어를 선택
+     * @param {Array} candidates - 후보 단어 배열
+     * @param {Array} modes - 활성화된 게임 모드 배열
+     * @param {Set} usedWords - 이미 사용한 단어 집합
+     * @returns {string|null} 선택된 단어
+     */
+    selectBestWord(candidates, modes, usedWords = new Set()) {
+      if (!candidates || candidates.length === 0) return null;
+
+      // 사용하지 않은 단어만 필터링
+      const available = candidates.filter(w => !usedWords.has(w));
+      if (available.length === 0) return candidates[0];
+
+      // 선택된 모드가 없으면 기본 동작
+      if (!modes || modes.length === 0) {
+        return available[0];
+      }
+
+      // 각 단어에 점수 계산
+      const scored = available.map(word => ({
+        word,
+        score: wordTraits.getScore(word, modes),
+      }));
+
+      // 점수순 정렬
+      scored.sort((a, b) => b.score - a.score);
+
+      // 점수가 같으면 길이순으로 정렬 (긴 단어 우선)
+      if (scored.length > 1 && scored[0].score === scored[1].score) {
+        scored.sort((a, b) => b.word.length - a.word.length);
+      }
+
+      return scored[0].word;
+    },
+
+    /**
+     * 특정 시작 글자에 맞는 단어를 모드별로 필터링
+     * @param {Array} candidates - 후보 단어 배열
+     * @param {Array} modes - 게임 모드
+     * @returns {Array} 필터링된 단어 배열
+     */
+    filterByMode(candidates, modes) {
+      if (!modes || modes.length === 0) return candidates;
+
+      return candidates.filter(word => {
+        // 모드 중 하나라도 매칭되면 포함
+        if (modes.includes('longWord') && wordTraits.isLongWord(word)) {
+          return true;
+        }
+        if (modes.includes('oneShot') && wordTraits.isOneShotWord(word)) {
+          return true;
+        }
+        if (modes.includes('mission') && wordTraits.isMissionWord(word)) {
+          return true;
+        }
+        return false;
+      });
+    },
+
+    /**
+     * 디버그용 단어 분석
+     */
+    analyzeWord(word) {
+      return {
+        word,
+        length: word.length,
+        isLongWord: wordTraits.isLongWord(word),
+        isOneShot: wordTraits.isOneShotWord(word),
+        isMission: wordTraits.isMissionWord(word),
+      };
+    },
+
+    /**
+     * 통계: 후보 단어들의 특성 분석
+     */
+    analyzePool(candidates) {
+      const stats = {
+        total: candidates.length,
+        longWords: candidates.filter(w => wordTraits.isLongWord(w)).length,
+        oneShotWords: candidates.filter(w => wordTraits.isOneShotWord(w)).length,
+        missionWords: candidates.filter(w => wordTraits.isMissionWord(w)).length,
+        avgLength: candidates.reduce((sum, w) => sum + w.length, 0) / candidates.length,
+      };
+      return stats;
+    },
+  };
+})();
+
+(function () {
+  // GUI 패널 - 게임 모드 선택 및 설정 관리
+  const g = window.KkutuBot = window.KkutuBot || {};
+  if (g.GUI) return;
+
+  const config = {
+    enabled: false,
+    modes: {
+      longWord: false,      // 긴 단어 (40글자 이상)
+      oneShot: false,       // 한방 단어 (공격용)
+      mission: false,       // 미션 단어
+    },
+    minWordLength: 2,
+    maxCheckCount: 3,
+    autoStart: false,
+  };
+
+  function createPanel() {
+    // 기존 패널 제거
+    const existing = document.getElementById('kkutubot-panel');
+    if (existing) existing.remove();
+
+    // 패널 생성
+    const panel = document.createElement('div');
+    panel.id = 'kkutubot-panel';
+    panel.style.cssText = `
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 10000;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: 2px solid #fff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      color: #fff;
+      width: 300px;
+      min-height: 200px;
+    `;
+
+    // 제목
+    const title = document.createElement('h3');
+    title.textContent = '🤖 KkutuBot';
+    title.style.cssText = 'margin: 0 0 15px 0; font-size: 18px; font-weight: bold;';
+
+    // 토글 스위치 생성 함수
+    function createToggle(label, key, onChange) {
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        padding: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+      `;
+
+      const labelEl = document.createElement('label');
+      labelEl.textContent = label;
+      labelEl.style.cssText = 'flex: 1; cursor: pointer; font-size: 14px;';
+
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.checked = config.modes[key] || false;
+      toggle.style.cssText = `
+        width: 40px;
+        height: 24px;
+        cursor: pointer;
+      `;
+
+      toggle.addEventListener('change', (e) => {
+        config.modes[key] = e.target.checked;
+        onChange(e.target.checked);
+      });
+
+      wrapper.appendChild(labelEl);
+      wrapper.appendChild(toggle);
+      return wrapper;
+    }
+
+    // 게임 모드 섹션
+    const modesSection = document.createElement('div');
+    modesSection.style.cssText = 'margin-bottom: 15px;';
+
+    const modesTitle = document.createElement('div');
+    modesTitle.textContent = '📋 게임 모드';
+    modesTitle.style.cssText = 'font-weight: bold; margin-bottom: 8px; font-size: 13px; opacity: 0.9;';
+    modesSection.appendChild(modesTitle);
+
+    modesSection.appendChild(createToggle('긴 단어 (40+글자)', 'longWord', () => {
+      console.log('[KkutuBot] 긴 단어 모드:', config.modes.longWord);
+    }));
+
+    modesSection.appendChild(createToggle('한방/공격 단어', 'oneShot', () => {
+      console.log('[KkutuBot] 한방 단어 모드:', config.modes.oneShot);
+    }));
+
+    modesSection.appendChild(createToggle('미션 우선', 'mission', () => {
+      console.log('[KkutuBot] 미션 모드:', config.modes.mission);
+    }));
+
+    // 상태 표시
+    const statusSection = document.createElement('div');
+    statusSection.style.cssText = `
+      margin-bottom: 15px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 6px;
+      font-size: 12px;
+    `;
+
+    const statusText = document.createElement('div');
+    statusText.id = 'kkutubot-status';
+    statusText.textContent = '⏹️ 준비 완료';
+    statusText.style.cssText = 'margin-bottom: 5px;';
+    statusSection.appendChild(statusText);
+
+    const statsText = document.createElement('div');
+    statsText.id = 'kkutubot-stats';
+    statsText.textContent = '';
+    statsText.style.cssText = 'opacity: 0.8;';
+    statusSection.appendChild(statsText);
+
+    // 버튼 그룹
+    const buttonGroup = document.createElement('div');
+    buttonGroup.style.cssText = `
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    `;
+
+    function createButton(text, color, onClick) {
+      const btn = document.createElement('button');
+      btn.textContent = text;
+      btn.style.cssText = `
+        flex: 1;
+        padding: 8px 12px;
+        background: ${color};
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: bold;
+        transition: all 0.2s;
+      `;
+      btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'scale(1.05)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.transform = 'scale(1)';
+      });
+      btn.addEventListener('click', onClick);
+      return btn;
+    }
+
+    const startBtn = createButton('▶ 시작', '#4CAF50', () => {
+      if (!g.Engine.status().running) {
+        g.Engine.start();
+        updateStatus();
+      }
+    });
+
+    const stopBtn = createButton('⏹ 중지', '#f44336', () => {
+      if (g.Engine.status().running) {
+        g.Engine.stop();
+        updateStatus();
+      }
+    });
+
+    const collapseBtn = createButton('접기', '#759FFF', () => {
+      const content = document.getElementById('kkutubot-content');
+      const isHidden = content.style.display === 'none';
+      content.style.display = isHidden ? 'block' : 'none';
+      collapseBtn.textContent = isHidden ? '접기' : '펼치기';
+    });
+
+    buttonGroup.appendChild(startBtn);
+    buttonGroup.appendChild(stopBtn);
+    buttonGroup.appendChild(collapseBtn);
+
+    // 컨텐츠 래퍼
+    const content = document.createElement('div');
+    content.id = 'kkutubot-content';
+    content.appendChild(modesSection);
+    content.appendChild(statusSection);
+    content.appendChild(buttonGroup);
+
+    panel.appendChild(title);
+    panel.appendChild(content);
+
+    document.body.appendChild(panel);
+
+    return {
+      updateStatus,
+      panel,
+    };
+  }
+
+  function updateStatus() {
+    const status = g.Engine?.status?.();
+    const statusEl = document.getElementById('kkutubot-status');
+    const statsEl = document.getElementById('kkutubot-stats');
+
+    if (!statusEl || !statsEl) return;
+
+    if (status?.running) {
+      statusEl.textContent = '▶️ 실행 중';
+      statusEl.style.color = '#4CAF50';
+    } else {
+      statusEl.textContent = '⏹️ 중지됨';
+      statusEl.style.color = '#f44336';
+    }
+
+    if (status) {
+      const modeStr = Object.entries(config.modes)
+        .filter(([_, v]) => v)
+        .map(([k]) => k)
+        .join(', ') || '없음';
+
+      statsEl.innerHTML = `
+        모드: ${modeStr}<br>
+        차례: ${status.turnCount || 0}<br>
+        단어 캐시: ${status.dictCache || 0}
+      `;
+    }
+  }
+
+  g.GUI = {
+    init() {
+      createPanel();
+      // 1초마다 상태 업데이트
+      setInterval(updateStatus, 1000);
+      console.log('[KkutuBot] GUI initialized');
+    },
+
+    getConfig() {
+      return config;
+    },
+
+    updateConfig(newConfig) {
+      Object.assign(config, newConfig);
+    },
+
+    getEnabledModes() {
+      return Object.entries(config.modes)
+        .filter(([_, enabled]) => enabled)
+        .map(([mode]) => mode);
+    },
+
+    hide() {
+      const panel = document.getElementById('kkutubot-panel');
+      if (panel) panel.style.display = 'none';
+    },
+
+    show() {
+      const panel = document.getElementById('kkutubot-panel');
+      if (panel) panel.style.display = 'block';
+    },
+  };
+})();
+
+(function () {
+  const g = window.KkutuBot = window.KkutuBot || {};
+  if (g.Engine) return;
+
+  const state = {
+    running: false,
+    lastAction: '',
+    lastWord: '',
+    lastCandidate: '',
+    error: null,
+    turnCount: 0,
+    promise: Promise.resolve(),
+    tickInterval: 3000,
+  };
+
+  function log(message) {
+    console.log('[KkutuBot]', message);
+    state.lastAction = message;
+  }
+
+  function isSafePage() {
+    return g.DOM?.isGamePage?.();
+  }
+
+  function getLastHangulChar(word) {
+    if (!word) return '';
+    const matches = word.match(/[\uAC00-\uD7A3]/g);
+    return matches ? matches[matches.length - 1] : '';
+  }
+
+  async function chooseWord(startChar) {
+    // 1. 이미 사용한 단어 수집
+    const usedSet = new Set(g.DOM?.getWordHistory?.() || []);
+    
+    // 2. 후보 단어 가져오기
+    const candidates = g.WordList?.getCandidates(startChar, usedSet) || [];
+    
+    if (!candidates.length) {
+      log(`No candidate words found for start character ${startChar}`);
+      return null;
+    }
+
+    // 3. GUI 설정에서 활성화된 모드 가져오기
+    const enabledModes = g.GUI?.getEnabledModes?.() || [];
+
+    // 4. Strategy를 사용해 최적의 단어 선택
+    let selectedWord;
+    if (enabledModes.length > 0) {
+      selectedWord = g.Strategy?.selectBestWord(candidates, enabledModes, usedSet);
+    } else {
+      selectedWord = candidates[0];
+    }
+
+    if (!selectedWord) {
+      log(`No valid word could be chosen for start '${startChar}'.`);
+      return null;
+    }
+
+    // 5. 최대 3개까지만 검증 (API 부하 제어)
+    const maxCheckCount = Math.min(3, candidates.length);
+    const checkList = candidates.slice(0, maxCheckCount);
+
+    for (const candidate of checkList) {
+      try {
+        const valid = await g.Dict?.isValidWord(candidate);
+        if (valid) {
+          return candidate;
+        }
+      } catch (error) {
+        log(`Dictionary lookup error for ${candidate}: ${error.message || error}`);
+      }
+    }
+
+    // 검증된 단어가 없으면 선택된 단어 사용
+    log(`No verified word found, using selected: ${selectedWord}`);
+    return selectedWord;
+  }
+
+  async function playTurn() {
+    if (!isSafePage()) {
+      state.error = 'Not on a kkutu game page.';
+      return;
+    }
+
+    if (!g.DOM?.isMyTurn?.()) {
+      return;
+    }
+
+    const lastWord = g.DOM?.getLastWord?.();
+    if (!lastWord) {
+      log('Cannot read the current game word.');
+      return;
+    }
+
+    const startChar = getLastHangulChar(lastWord);
+    if (!startChar) {
+      log(`Unable to determine the start character from '${lastWord}'.`);
+      return;
+    }
+
+    const candidate = await chooseWord(startChar);
+    if (!candidate) {
+      log(`No valid word could be chosen for start '${startChar}'.`);
+      return;
+    }
+
+    try {
+      g.DOM?.sendWord(candidate);
+      state.turnCount += 1;
+      state.lastWord = lastWord;
+      state.lastCandidate = candidate;
+      
+      // 선택된 모드 정보를 포함한 로그
+      const modes = g.GUI?.getEnabledModes?.() || [];
+      log(`Submitted '${candidate}' (${modes.join(', ') || 'no mode'}) for '${lastWord}'`);
+    } catch (error) {
+      state.error = error;
+      log(`Failed to send word '${candidate}': ${error}`);
+    }
+  }
+
+  async function tick() {
+    if (!state.running) return;
+    if (!isSafePage()) {
+      log('Stopped because this is not a kkutu game page.');
+      state.running = false;
+      return;
+    }
+
+    if (g.DOM?.isChatDisconnected?.()) {
+      log('WebSocket disconnected. Pausing for 5 seconds...');
+      state.tickInterval = 5000;
+      setTimeout(() => {
+        state.tickInterval = 3000;
+      }, 5000);
+      return;
+    }
+
+    const isTurn = g.DOM?.isMyTurn?.();
+    if (isTurn) {
+      await playTurn();
+    }
+  }
+
+  function scheduleNext() {
+    if (!state.running) return;
+    state.promise = state.promise.then(() => new Promise(resolve => {
+      window.setTimeout(async () => {
+        await tick();
+        resolve();
+      }, state.tickInterval);
+    })).then(() => {
+      if (state.running) scheduleNext();
+    });
+  }
 
   g.Engine = {
-    running: false,
-    tick() {
-      if (!this.running) return;
-
-      const currentWord = g.DOM.getPresentWord();
-      
-      if (currentWord && g.DOM.isMyTurn()) {
-        const lastChar = currentWord.charAt(currentWord.length - 1);
-        
-        // WordList가 로드되어 있는지 확인
-        if (g.WordList && g.WordList.getCandidates) {
-          const candidates = g.WordList.getCandidates(lastChar);
-          if (candidates && candidates.length > 0) {
-            // 이미 사용한 단어 제외 로직이 WordList에 없다면 첫 번째 단어 사용
-            g.DOM.sendWord(candidates[0]);
-          }
-        }
-      }
-      
-      // 체크 간격 (너무 빠르면 감지되므로 2~3초 권장)
-      setTimeout(() => this.tick(), 2500);
-    },
     start() {
-      this.running = true;
-      console.log('[KkutuBot] 실행 중...');
-      this.tick();
+      if (state.running) {
+        log('KkutuBot is already running.');
+        return;
+      }
+      if (!isSafePage()) {
+        log('Cannot start: not on a supported kkutu game page.');
+        return;
+      }
+      state.running = true;
+      state.error = null;
+      log('KkutuBot started. Waiting for your turn.');
+      scheduleNext();
     },
+
     stop() {
-      this.running = false;
-      console.log('[KkutuBot] 정지됨.');
-    }
+      if (!state.running) {
+        log('KkutuBot is not running.');
+        return;
+      }
+      state.running = false;
+      log('KkutuBot stopped.');
+    },
+
+    status() {
+      const dictStats = g.Dict?.getCacheStats?.() || {};
+      return {
+        running: state.running,
+        lastAction: state.lastAction,
+        lastWord: state.lastWord,
+        lastCandidate: state.lastCandidate,
+        error: state.error,
+        turnCount: state.turnCount,
+        tickInterval: state.tickInterval,
+        dictCache: dictStats.cachedWords,
+        pendingDictRequests: dictStats.pendingRequests,
+      };
+    },
+
+    setTickInterval(ms) {
+      if (ms < 500) {
+        log('Warning: Interval below 500ms may cause server overload. Setting minimum to 500ms.');
+        state.tickInterval = 500;
+      } else {
+        state.tickInterval = ms;
+        log(`Tick interval set to ${ms}ms`);
+      }
+    },
+
+    clearDictCache() {
+      g.Dict?.clearCache?.();
+    },
+
+    async playOnce() {
+      await tick();
+    },
+
+    addWords(words) {
+      g.WordList?.addWords(words);
+      log(`Added ${Array.isArray(words) ? words.length : 0} words to the candidate pool.`);
+    },
   };
+})();
+
+
+// 번들 초기화
+(function() {
+  try {
+    if (typeof window.KkutuBot === 'undefined') {
+      console.error('[KkutuBot] KkutuBot not defined');
+      return;
+    }
+    console.log('[KkutuBot] ✓ Bundle loaded');
+    console.log('[KkutuBot] GUI 초기화 중...');
+    window.KkutuBot.GUI?.init?.();
+    console.log('[KkutuBot] 준비 완료! KkutuBot.Engine.start() 를 실행하세요.');
+  } catch (err) {
+    console.error('[KkutuBot] Initialization error:', err.message);
+  }
 })();
