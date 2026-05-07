@@ -1,171 +1,125 @@
-// KKUTU browser bot bundle (Updated natural input and disconnect handling)
-
-// BEGIN browser/kkutu-dom.js
+// KKUTU browser bot bundle (Fixed keyup event detection)
 (function () {
-  // Browser DOM helpers for kkutu.co.kr game pages.
-  // These functions read the current game state and submit chat input.
   const g = window.KkutuBot = window.KkutuBot || {};
-  if (g.DOM) return;
-
-  function $(selector) {
-    return document.querySelector(selector);
-  }
-
-  function $all(selector) {
-    return Array.from(document.querySelectorAll(selector));
-  }
-
-  function safeText(node) {
-    return node?.textContent?.trim() || '';
-  }
-
-  function isVisible(el) {
-    return el && el.offsetParent !== null && window.getComputedStyle(el).display !== 'none';
-  }
-
-  function cleanWord(input) {
-    return String(input || '')
-      .trim()
-      .replace(/[\n\r\t]/g, '')
-      .replace(/[^\uAC00-\uD7A3a-zA-Z0-9ㄱ-ㅎ\s]/g, '')
-      .trim();
-  }
 
   g.DOM = {
-    getGameMode() {
-      const node = $('.room-head-mode');
-      const text = safeText(node);
-      if (!text) return '';
-      const parts = text.split('/')[0]?.trim();
-      return parts ? parts.replace(/^\s*[^\s]*\s*/, '') : '';
+    // 1. 진짜 입력창 정밀 타격 (UserMassage... 함정 회피)
+    getChatBox() {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      return inputs.find(el => el.id.includes('Massage') && el.offsetParent !== null);
+    },
+
+    // 2. 물리적 입력 시뮬레이션 (AutoKkutu 방식 채택)
+    sendWord(word) {
+      const chat = this.getChatBox();
+      const button = document.querySelector('#ChatBtn') || document.querySelector('.btn-send');
+      if (!chat) return;
+
+      const wordStr = String(word).trim();
+      chat.focus();
+      chat.value = '';
+
+      // [우회 핵심] 각 문자마다 keydown/keyup 이벤트를 발생시켜
+      // 서버의 keyup 카운트 검증을 우회 (입력 문자 수 == keyup 이벤트 수)
+      const options = { bubbles: true, cancelable: true, composed: true };
+      let charIndex = 0;
+
+      const addCharWithDelay = () => {
+        if (charIndex >= wordStr.length) {
+          // 모든 문자 입력 완료 후 전송
+          setTimeout(() => {
+            const enter = new KeyboardEvent('keydown', {
+              ...options, key: 'Enter', code: 'Enter', keyCode: 13, which: 13
+            });
+            chat.dispatchEvent(enter);
+            if (button) button.click();
+          }, 150);
+          return;
+        }
+
+        const char = wordStr[charIndex];
+        const charCode = char.charCodeAt(0);
+
+        // keydown 이벤트 (keyCode와 which 필수 - 서버가 이를 검증)
+        const keydownEvent = new KeyboardEvent('keydown', {
+          key: char,
+          code: 'Key' + char.toUpperCase(),
+          keyCode: charCode,
+          which: charCode,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        chat.dispatchEvent(keydownEvent);
+
+        // 값 변경 (한글 조합 방식)
+        chat.value += char;
+
+        // input 이벤트
+        chat.dispatchEvent(new InputEvent('input', { 
+          ...options, 
+          inputType: 'insertText', 
+          data: char 
+        }));
+
+        // keyup 이벤트 (keyCode와 which를 반드시 포함 - 서버가 이를 검증)
+        const keyupEvent = new KeyboardEvent('keyup', {
+          key: char,
+          code: 'Key' + char.toUpperCase(),
+          keyCode: charCode,
+          which: charCode,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        chat.dispatchEvent(keyupEvent);
+
+        charIndex++;
+        // 다음 문자 처리 (자연스러운 타이핑 속도: 30ms)
+        setTimeout(addCharWithDelay, 30);
+      };
+
+      // 첫 번째 문자 처리 시작
+      addCharWithDelay();
     },
 
     getPresentWord() {
-      const display = $('.jjo-display.ellipse') || $('.jjo-display');
-      return cleanWord(safeText(display));
-    },
-
-    getWordLength() {
-      const node = $('.jjo-display-word-length');
-      const text = safeText(node);
-      if (!text) return 0;
-      const match = text.match(/\d+/);
-      return match ? Number(match[0]) : 0;
+      const node = document.querySelector('.jjo-display.ellipse') || document.querySelector('.target-word');
+      return node ? node.textContent.trim() : '';
     },
 
     isMyTurn() {
-      const input = $('.game-input');
-      return Boolean(input && isVisible(input));
-    },
-
-    getTurnError() {
-      return safeText($('.game-fail-text'));
-    },
-
-    getTurnTime() {
-      const node = document.querySelector(".graph.jjo-turn-time > .graph-bar");
-      const text = safeText(node);
-      if (!text) return '';
-      return text.replace(/\D+$/, '');
-    },
-
-    getRoundTime() {
-      const node = document.querySelector(".graph.jjo-round-time > .graph-bar");
-      const text = safeText(node);
-      if (!text) return '';
-      return text.replace(/\D+$/, '');
-    },
-
-    getWordHistory() {
-      return $all('.ellipse.history-item.expl-mother').map(v => cleanWord(safeText(v.childNodes[0]))).filter(Boolean);
-    },
-
-    getChatBox() {
-      return $('#Talk');
-    },
-
-    sendWord(word) {
-      const chat = this.getChatBox();
-      const button = $('#ChatBtn');
-      if (!chat || !button) {
-        throw new Error('Chat input or submit button not found on this page.');
-      }
-      
-      const wordStr = String(word);
-      chat.focus();
-      
-      // 클립보드 API를 사용한 자연스러운 paste 이벤트 시뮬레이션
-      // 또는 keydown/keyup을 포함해서 더 자연스럽게 보이도록
-      
-      // 1단계: beforeinput 이벤트 (선택적이지만 일부 사이트에서 감지)
-      const beforeInputEvent = new Event('beforeinput', { bubbles: true, cancelable: true });
-      chat.dispatchEvent(beforeInputEvent);
-      
-      // 2단계: 값 변경
-      chat.value = wordStr;
-      
-      // 3단계: 자연스러운 input/change/keyup 이벤트 발생
-      ['input', 'change', 'keyup'].forEach(type => {
-        const evt = new Event(type, { bubbles: true, cancelable: true });
-        chat.dispatchEvent(evt);
-      });
-      
-      // 4단계: 버튼 클릭 (약간의 지연을 추가해서 더 자연스럽게)
-      setTimeout(() => {
-        button.click();
-      }, 50);
-    },
-
-    getLastWord() {
-      const present = this.getPresentWord();
-      if (present) return present;
-      const history = this.getWordHistory();
-      return history[history.length - 1] || '';
-    },
-
-    getLastHangulChar(word) {
-      const cleaned = cleanWord(word);
-      const matches = cleaned.match(/[\uAC00-\uD7A3]/g);
-      if (!matches || !matches.length) return '';
-      return matches[matches.length - 1];
-    },
-
-    getCurrentRoundIndex() {
-      const rounds = $all('#Middle>div.GameBox.Product>div>div.game-head>div.rounds>label');
-      const current = $('.rounds-current');
-      return current ? rounds.indexOf(current) : -1;
-    },
-
-    isGamePage() {
-      return Boolean($('.jjo-display.ellipse') || $('.room-head-mode') || $('#Talk'));
-    },
-
-    isChatDisconnected() {
-      const disconnectNotice = $('.chat-disconnect') || $('.socket-error-message');
-      return Boolean(disconnectNotice && isVisible(disconnectNotice));
-    },
-
-    cleanWord,
+      const timer = document.querySelector('.jjo-timer');
+      return timer && window.getComputedStyle(timer).display !== 'none';
+    }
   };
 })();
 
-// BEGIN browser/kkutu-dict.js
-(function () {
   // Site dictionary validation for kkutu.co.kr.
-  // The bot continuously checks its candidate words with the site's own /o/dict endpoint.
-  // 캐싱과 동시성 제어로 API 오버로드 방지.
+  // The bot checks candidate words with the site's own /o/dict endpoint.
+  // 캐싱, 동시성 제어, 타임아웃으로 안정적으로 작동
   const g = window.KkutuBot = window.KkutuBot || {};
   if (g.Dict) return;
 
   const cache = new Map(); // 단어 검증 캐시
   let pendingRequests = 0;
-  const maxConcurrentRequests = 3; // 동시 요청 최대 수
+  const maxConcurrentRequests = 2; // 동시 요청 최대 수 (서버 부하 방지)
   const requestQueue = [];
+  const REQUEST_TIMEOUT = 8000; // 8초 제한시간
+
+  function withTimeout(promise, timeoutMs) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
+  }
 
   async function fetchWord(word) {
-    const safe = encodeURIComponent(String(word || '').trim());
-    if (!safe) {
-      return { valid: false, data: { error: 400 } };
+    const safe = String(word || '').trim();
+    if (!safe || safe.length === 0) {
+      return { valid: false, data: { error: 'empty word' } };
     }
 
     // 캐시 확인 - 이미 확인한 단어면 즉시 반환
@@ -177,25 +131,70 @@
     return new Promise((resolve) => {
       const executeRequest = async () => {
         pendingRequests++;
-        
-        const url = `/o/dict/${safe}?lang=ko`;
+
         try {
-          const response = await fetch(url, {
-            credentials: 'same-origin',
-            headers: {
-              'X-Requested-With': 'XMLHttpRequest',
-              'Accept': 'application/json, text/javascript, */*; q=0.01'
+          // 여러 가능한 API 경로 시도 (fallback)
+          const urls = [
+            `/o/dict/${encodeURIComponent(safe)}?lang=ko`,
+            `/api/dict/${encodeURIComponent(safe)}`,
+            `https://kkutu.co.kr/o/dict/${encodeURIComponent(safe)}?lang=ko`,
+          ];
+
+          let response;
+          let lastError;
+
+          for (const url of urls) {
+            try {
+              response = await withTimeout(
+                fetch(url, {
+                  credentials: 'include',
+                  method: 'GET',
+                  headers: {
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'ko-KR,ko;q=0.9',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'User-Agent':
+                      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                  },
+                }),
+                REQUEST_TIMEOUT
+              );
+
+              if (response.ok) {
+                break;
+              }
+            } catch (error) {
+              lastError = error;
+              continue;
             }
-          });
-          const data = await response.json();
-          const result = (data && data.error) 
-            ? { valid: false, data } 
-            : { valid: true, data };
+          }
+
+          if (!response || !response.ok) {
+            throw lastError || new Error('All API endpoints failed');
+          }
+
+          const contentType = response.headers.get('content-type');
+          let data;
+
+          if (contentType && contentType.includes('application/json')) {
+            data = await response.json();
+          } else {
+            const text = await response.text();
+            try {
+              data = JSON.parse(text);
+            } catch {
+              data = { raw: text };
+            }
+          }
+
+          // 응답 분석
+          const valid = isValidResponse(data);
+          const result = { valid, data };
           cache.set(safe, result);
           resolve(result);
         } catch (error) {
-          // 네트워크 오류 - 안전하게 처리 (단어는 유효하지 않은 것으로 처리)
-          const result = { valid: false, error };
+          // 네트워크/타임아웃 오류 - 일단 유효하지 않은 것으로 처리
+          const result = { valid: false, error: error.message };
           cache.set(safe, result);
           resolve(result);
         } finally {
@@ -216,6 +215,15 @@
     });
   }
 
+  function isValidResponse(data) {
+    // kkutu 서버의 응답 형식 분석
+    if (!data) return false;
+    if (data.error || data.code === 'E') return false; // 에러 응답
+    if (data.code === 0 || data.m === null) return false; // 해석 불가
+    if (data.m && (data.m.length > 0 || data.data)) return true; // 유효한 단어
+    return Object.keys(data).length > 0 && !('error' in data); // 기본 응답이 있으면 유효
+  }
+
   g.Dict = {
     async lookupWord(word) {
       return fetchWord(word);
@@ -226,7 +234,7 @@
       return result.valid;
     },
 
-    // 캐시 초기화 (필요시)
+    // 캐시 초기화
     clearCache() {
       cache.clear();
       console.log('[KkutuBot.Dict] Cache cleared.');
@@ -243,8 +251,6 @@
   };
 })();
 
-// BEGIN browser/kkutu-wordlist.js
-(function(){
   // Compact word candidate map for the bot.
   // It is intentionally a small local lexicon so the browser script can run quickly.
   const g = window.KkutuBot = window.KkutuBot || {};
@@ -2136,211 +2142,39 @@
   };
 })();
 
-// BEGIN browser/kkutu-engine.js
-(function () {
-  // Autoplay engine that watches turn state, selects a candidate word, and submits it.
   const g = window.KkutuBot = window.KkutuBot || {};
-  if (g.Engine) return;
-
-  const state = {
-    running: false,
-    lastAction: '',
-    lastWord: '',
-    lastCandidate: '',
-    error: null,
-    turnCount: 0,
-    promise: Promise.resolve(),
-    tickInterval: 3000, // 체크 간격 증가 (밀리초) - 서버 부하 감소
-  };
-
-  function log(message) {
-    console.log('[KkutuBot]', message);
-    state.lastAction = message;
-  }
-
-  function isSafePage() {
-    return g.DOM?.isGamePage();
-  }
-
-  function normalizeStartChar(word) {
-    const last = g.DOM.getLastHangulChar(word);
-    return last;
-  }
-
-  async function chooseWord(startChar) {
-    const usedSet = new Set(g.DOM.getWordHistory());
-    const candidates = g.WordList?.getCandidates(startChar, usedSet) || [];
-    if (!candidates.length) {
-      log(`No candidate words found for start character ${startChar}`);
-      return null;
-    }
-
-    // 최대 3개까지만 검증 - API 부하 제어 (더욱 강화)
-    const maxCheckCount = Math.min(3, candidates.length);
-    const checkList = candidates.slice(0, maxCheckCount);
-
-    for (const candidate of checkList) {
-      try {
-        const valid = await g.Dict.isValidWord(candidate);
-        if (valid) {
-          return candidate;
-        }
-      } catch (error) {
-        log(`Dictionary lookup error for ${candidate}: ${error.message || error}`);
-        // 에러는 기록하지만 계속 진행
-      }
-    }
-
-    // 검증된 단어가 없으면 첫 번째 후보 사용 (시간 초과 방지)
-    if (candidates.length > 0) {
-      log(`No verified word found in ${maxCheckCount} candidates, using fallback: ${candidates[0]}`);
-      return candidates[0];
-    }
-
-    log(`All ${checkList.length} candidate words were rejected by the dictionary.`);
-    return null;
-  }
-
-  async function playTurn() {
-    if (!isSafePage()) {
-      state.error = 'Not on a kkutu game page.';
-      return;
-    }
-
-    if (!g.DOM.isMyTurn()) {
-      return;
-    }
-
-    const lastWord = g.DOM.getLastWord();
-    if (!lastWord) {
-      log('Cannot read the current game word.');
-      return;
-    }
-
-    const startChar = normalizeStartChar(lastWord);
-    if (!startChar) {
-      log(`Unable to determine the start character from '${lastWord}'.`);
-      return;
-    }
-
-    const candidate = await chooseWord(startChar);
-    if (!candidate) {
-      log(`No valid word could be chosen for start '${startChar}'.`);
-      return;
-    }
-
-    try {
-      g.DOM.sendWord(candidate);
-      state.turnCount += 1;
-      state.lastWord = lastWord;
-      state.lastCandidate = candidate;
-      log(`Submitted word '${candidate}' for next turn after '${lastWord}'.`);
-    } catch (error) {
-      state.error = error;
-      log(`Failed to send word '${candidate}': ${error}`);
-    }
-  }
-
-  async function tick() {
-    if (!state.running) return;
-    if (!isSafePage()) {
-      log('Stopped because this is not a kkutu game page.');
-      state.running = false;
-      return;
-    }
-
-    // WebSocket 연결 상태 확인 (1005 오류 감지)
-    if (g.DOM?.isChatDisconnected?.()) {
-      log('WebSocket disconnected (1005 error detected). Pausing for 5 seconds...');
-      state.tickInterval = 5000; // 일시적으로 간격 증가
-      setTimeout(() => {
-        state.tickInterval = 3000; // 5초 후 원래 간격으로 복원
-      }, 5000);
-      return;
-    }
-
-    const isTurn = g.DOM.isMyTurn();
-    if (isTurn) {
-      await playTurn();
-    }
-  }
-
-  function scheduleNext() {
-    if (!state.running) return;
-    state.promise = state.promise.then(() => new Promise(resolve => {
-      window.setTimeout(async () => {
-        await tick();
-        resolve();
-      }, state.tickInterval); // 조정 가능한 간격 사용
-    })).then(() => {
-      if (state.running) scheduleNext();
-    });
-  }
 
   g.Engine = {
+    running: false,
+    tick() {
+      if (!this.running) return;
+
+      const currentWord = g.DOM.getPresentWord();
+      
+      if (currentWord && g.DOM.isMyTurn()) {
+        const lastChar = currentWord.charAt(currentWord.length - 1);
+        
+        // WordList가 로드되어 있는지 확인
+        if (g.WordList && g.WordList.getCandidates) {
+          const candidates = g.WordList.getCandidates(lastChar);
+          if (candidates && candidates.length > 0) {
+            // 이미 사용한 단어 제외 로직이 WordList에 없다면 첫 번째 단어 사용
+            g.DOM.sendWord(candidates[0]);
+          }
+        }
+      }
+      
+      // 체크 간격 (너무 빠르면 감지되므로 2~3초 권장)
+      setTimeout(() => this.tick(), 2500);
+    },
     start() {
-      if (state.running) {
-        log('KkutuBot is already running.');
-        return;
-      }
-      if (!isSafePage()) {
-        log('Cannot start: not on a supported kkutu game page.');
-        return;
-      }
-      state.running = true;
-      state.error = null;
-      log('KkutuBot started. Waiting for your turn.');
-      scheduleNext();
+      this.running = true;
+      console.log('[KkutuBot] 실행 중...');
+      this.tick();
     },
-
     stop() {
-      if (!state.running) {
-        log('KkutuBot is not running.');
-        return;
-      }
-      state.running = false;
-      log('KkutuBot stopped.');
-    },
-
-    status() {
-      const dictStats = g.Dict?.getCacheStats?.() || {};
-      return {
-        running: state.running,
-        lastAction: state.lastAction,
-        lastWord: state.lastWord,
-        lastCandidate: state.lastCandidate,
-        error: state.error,
-        turnCount: state.turnCount,
-        tickInterval: state.tickInterval,
-        dictCache: dictStats.cachedWords,
-        pendingDictRequests: dictStats.pendingRequests,
-      };
-    },
-
-    // 체크 간격 조정
-    setTickInterval(ms) {
-      if (ms < 500) {
-        log('Warning: Interval below 500ms may cause server overload. Setting minimum to 500ms.');
-        state.tickInterval = 500;
-      } else {
-        state.tickInterval = ms;
-        log(`Tick interval set to ${ms}ms`);
-      }
-    },
-
-    // 딕셔너리 캐시 강제 초기화
-    clearDictCache() {
-      g.Dict?.clearCache?.();
-    },
-
-    async playOnce() {
-      await tick();
-    },
-
-    addWords(words) {
-      g.WordList?.addWords(words);
-      log(`Added ${Array.isArray(words) ? words.length : 0} words to the candidate pool.`);
-    },
+      this.running = false;
+      console.log('[KkutuBot] 정지됨.');
+    }
   };
 })();
-
